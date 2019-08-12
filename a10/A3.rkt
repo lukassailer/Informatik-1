@@ -1,0 +1,57 @@
+;; Die ersten drei Zeilen dieser Datei wurden von DrRacket eingefügt. Sie enthalten Metadaten
+;; über die Sprachebene dieser Datei in einer Form, die DrRacket verarbeiten kann.
+#reader(lib "DMdA-vanilla-reader.ss" "deinprogramm")((modname A3) (read-case-sensitive #f) (teachpacks ((lib "image2.rkt" "teachpack" "deinprogramm") (lib "universe.rkt" "teachpack" "deinprogramm"))) (deinprogramm-settings #(#f write repeating-decimal #t #t none explicit #f ((lib "image2.rkt" "teachpack" "deinprogramm") (lib "universe.rkt" "teachpack" "deinprogramm")))))
+;berechnet die Potenzmenge einer Menge
+;die Menge ist eine Liste und die Potenzmenge eine Liste aus Listen
+(: powerset ((list-of %a) -> (list-of (list-of %a))))
+(check-expect (powerset (list 1 2 3))
+              (list (list 1 2 3)
+                    (list 2 3)
+                    (list 1 3)
+                    (list 3)
+                    (list 1 2)
+                    (list 2)
+                    (list 1)
+                    empty))
+(check-expect (powerset (list 1 2 3 4))
+              (list (list 1 2 3 4)
+                    (list 2 3 4)
+                    (list 1 3 4)
+                    (list 3 4)
+                    (list 1 2 4)
+                    (list 2 4)
+                    (list 1 4)
+                    (list 4)
+                    (list 1 2 3)
+                    (list 2 3)
+                    (list 1 3)
+                    (list 3)
+                    (list 1 2)
+                    (list 2)
+                    (list 1)
+                    empty))
+(define powerset
+  (lambda (xs)
+    (match xs
+      (empty (list empty))
+      ((make-pair f r) (pworker f (powerset r))))))
+
+;dupliziert jede Teilliste der Liste p (kleine Potenzmenge) und erweitert die Hälfte davon um f
+(check-expect (pworker 1 (list (list 2) (list 3) (list 23)))
+              (list (list 1 2)
+                    (list 2)
+                    (list 1 3)
+                    (list 3)
+                    (list 1 23)
+                    (list 23)))
+(check-expect (pworker "A" (list (list 1) (list 2)))
+              (list (list "A" 1)
+                    (list 1)
+                    (list "A" 2)
+                    (list 2)))
+(define pworker
+  (lambda (f p)
+    (if (empty? p)
+        empty
+        (make-pair (make-pair f (first p))
+                   (make-pair (first p) (pworker f (rest p)))))))

@@ -1,0 +1,697 @@
+;; Die ersten drei Zeilen dieser Datei wurden von DrRacket eingefügt. Sie enthalten Metadaten
+;; über die Sprachebene dieser Datei in einer Form, die DrRacket verarbeiten kann.
+#reader(lib "DMdA-vanilla-reader.ss" "deinprogramm")((modname human-resource-machine_1) (read-case-sensitive #f) (teachpacks ((lib "image2.rkt" "teachpack" "deinprogramm") (lib "universe.rkt" "teachpack" "deinprogramm"))) (deinprogramm-settings #(#f write repeating-decimal #f #t none explicit #f ((lib "image2.rkt" "teachpack" "deinprogramm") (lib "universe.rkt" "teachpack" "deinprogramm")))))
+; --------------------------------------------------------------------------------------------------------------
+; The office
+; --------------------------------------------------------------------------------------------------------------
+
+; A post office consists of
+; - an inbox for incomming packages
+; - an outbox for outgoing packages
+; - a floor of fixed size to work on. Each slot contains either a package or nothing
+; - a worker who can carry a single package (or nothing)
+; - a list of instructions, telling the worker what to do step by step
+; - an instruction pointer, telling the worker what to do next. It is either an absolute
+;   position on the instructions board, starting from 0, or #f for "finish work!"
+; - a time clock which records the total time of work (in number of performed instructions)
+(define-record-procedures office
+  make-office
+  office?
+  (inbox
+   outbox
+   floor-slots
+   worker
+   instruction-list
+   ip
+   time-clock))
+
+(: make-office ((list-of package)
+                (list-of package)
+                (list-of (maybe-of package))
+                (maybe-of package)
+                (list-of (mixed instruction string))
+                (maybe-of natural)
+                natural
+                -> office))
+(: office? (any -> boolean))
+(: inbox (office -> (list-of package)))
+(: outbox (office -> (list-of package)))
+(: floor-slots (office -> (list-of (maybe-of package))))
+(: worker (office -> (maybe-of package)))
+(: instruction-list (office -> (list-of (mixed instruction string))))
+(: ip (office -> (maybe-of natural)))
+(: time-clock (office -> natural))
+
+; A package contains either a number or a character
+(define package (signature (mixed integer character)))
+
+; A character is an upper case letter of the alphabet between "A" and "Z" 
+(define character (signature (predicate (lambda (c) (and (string? c) (string<=? "A" c "Z"))))))
+
+; A (maybe-of ⟨t⟩) is either an element of signature ⟨t⟩ or empty (#f)
+(: maybe-of (signature -> signature))
+(define maybe-of
+  (lambda (t)
+    (signature (mixed t (one-of #f)))))
+
+
+; --------------------------------------------------------------------------------------------------------------
+; Some predefined list functions
+; --------------------------------------------------------------------------------------------------------------
+
+; replicate an element n times
+(: replicate (natural %a -> (list-of %a)))
+(define replicate
+  (lambda (n x)
+    (cond ((= n 0) empty)
+          (else (make-pair x (replicate (- n 1) x))))))
+
+; Zip two lists with a given function
+(: zipWith ((%a %b -> %c) (list-of %a) (list-of %b) -> (list-of %c)))
+(define zipWith
+  (lambda (f xs ys)
+    (cond ((empty? xs) empty)
+          ((empty? ys) empty)
+          (else        (make-pair (f (first xs) (first ys)) 
+                                  (zipWith f (rest xs) (rest ys)))))))
+
+; Return an integer list range
+(: range (integer integer -> (list-of integer)))
+(define range
+  (lambda (from to)
+    (cond ((> from to) empty)
+          (else (make-pair from (range (+ from 1) to))))))
+
+
+
+; --------------
+; Student task
+; --------------
+
+; Exercises (f) through (k): implement the higher-order procedures for list processing
+
+;(f) gibt für ein beliebiges Prädikat und eine Liste die Position des ersten Elements aus, auf das das Prädikat zutrifft
+(: list-index ((%a -> boolean) (list-of %a) -> natural))
+(check-expect (list-index true? (list #f #f #f #t)) 3)
+(check-expect (list-index true? (list #t #f #f #t #t)) 0)
+(check-error (list-index true? (list #f)) "Prädikat trifft auf kein Element zu!")
+(check-error (list-index true? empty) "Prädikat trifft auf kein Element zu!")
+(define list-index
+  (lambda (p l)
+    (letrec ((index-worker (lambda (p l i)
+                             (if (<= (length l) i)
+                                 (violation "Prädikat trifft auf kein Element zu!")
+                                 (if (p (list-ref l i)) i (index-worker p l (+ i 1)))))))
+      (index-worker p l 0))))
+
+
+
+; --------------------------------------------------------------------------------------------------------------
+; Instructions
+; --------------------------------------------------------------------------------------------------------------
+
+; An instruction consists of
+; - a text representation and
+; - a function that modifies a given office, following the instruction
+(define-record-procedures instruction
+  make-instr
+  instr?
+  (description action))
+
+(: make-instr (string (office -> office) -> instruction))
+(: instr? (any -> boolean))
+(: description (instruction -> string))
+(: action (instruction -> (office -> office)))
+
+
+; --------------
+; Student task
+; --------------
+
+; Exercises (a), (b), (g), (i), (k), (l) and (n): implement the instructions
+
+;(a) Der worker nimmt ein Paket von der inbox auf. Befindet sich dort kein Paket, beendet der Arbeiter regul ̈ar seinen Arbeitstag (d.h. der Instruction Pointer wird auf #f gesetzt).
+(: <-inbox instruction)
+(define <-inbox
+  (make-instr "<-inbox"
+              (lambda (o)                                                ;falls inbox leer
+                (if (empty? (inbox o)) (make-office (inbox o)
+                                                    (outbox o)
+                                                    (floor-slots o)
+                                                    (worker o)
+                                                    (instruction-list o)
+                                                    #f                   ;#f-eierabend
+                                                    (time-clock o))
+                    (make-office (rest (inbox o))                        ;sonst wird das erste Element der inbox
+                                 (outbox o)
+                                 (floor-slots o)
+                                 (first (inbox o))                       ;dem worker übergeben
+                                 (instruction-list o)
+                                 (ip o)
+                                 (time-clock o))))))
+
+
+;(b) Der worker legt das Paket, das er tr ̈agt, auf der outbox ab. Er tr ̈agt anschließend kein Paket mehr.
+;    Trägt der Arbeiter schon zuvor kein Paket, bricht er seine Arbeit mit einer entsprechenden Meldung (violation) ab.
+(: ->outbox instruction)
+(define ->outbox
+  (make-instr "->outbox"
+              (lambda (o)                                          ;falls der Worker kein Paket trägt -> violation
+                (if (empty? (worker o)) (violation "Der Arbeiter darf ohne Paket nicht auf die Outbox zugreifen!")
+                    (make-office (inbox o)                         ;sonst neues office...
+                                 (make-pair (worker o) (outbox o)) ;mit neuer outbox
+                                 (floor-slots o)
+                                 #f                            ;und leerem worker    
+                                 (instruction-list o)
+                                 (ip o)
+                                 (time-clock o))))))
+
+;(g) Instruktion jump die zu einem Label in der Instruction-list springt
+(: jump (string -> instruction))
+(define jump
+  (lambda (str)
+    (make-instr (string-append "jump_" str)
+                (lambda (o)
+                  (make-office (inbox o)
+                               (outbox o)
+                               (floor-slots o)
+                               (worker o)
+                               (instruction-list o)
+                               (if (false? (ip o))
+                                   #f
+                                   (list-index (lambda (x) (if (string? x)
+                                                               (string=? x str)
+                                                               #f))
+                                               (instruction-list o)))
+                                                 
+                               (+ (time-clock o) 1))))))
+
+
+;(i.1) Springt zu einem Label wenn das Paket welches der Worker trägt 0 ist, wenn der Worker nichts trägt wird eine violation ausgegeben
+(: jump-if-zero (string -> instruction))
+(define jump-if-zero
+  (lambda (str)
+    (make-instr (string-append "jump-if-zero_" str)
+                (lambda (o)
+                  (if (false? (worker o))
+                      (violation "Der Arbeiter Trägt kein Paket!")
+                      (if (and (not (string? (worker o))) (zero? (worker o)))
+                          ((action (jump str)) o)
+                          (make-office (inbox o)
+                                       (outbox o)
+                                       (floor-slots o)
+                                       (worker o)
+                                       (instruction-list o)
+                                       (ip o)
+                                       (+ (time-clock o) 1))))))))
+
+
+;(i.2) Springt zu einem Label wenn das Paket welches der Worker trägt negativ ist, wenn der Worker nichts trägt wird eine violation ausgegeben
+(: jump-if-negative (string -> instruction))
+(define jump-if-negative
+  (lambda (str)
+    (make-instr (string-append "jump-if-negative_" str)
+                (lambda (o)
+                  (if (false? (worker o))
+                      (violation "Der Arbeiter Trägt kein Paket!")
+                      (if (and (not (string? (worker o))) (negative? (worker o)))
+                          ((action (jump str)) o)
+                          (make-office (inbox o)
+                                       (outbox o)
+                                       (floor-slots o)
+                                       (worker o)
+                                       (instruction-list o)
+                                       (ip o)
+                                       (+ (time-clock o) 1))))))))
+
+
+
+;(k.eins) Ermöglicht es ein Element an einer beliebigen Stelle einer Liste auszutauschen
+(: list-update ((list-of %a) natural %a -> (list-of %a)))
+(check-expect (list-update (list 1 1 3) 1 2)
+              (list 1 2 3))
+(define list-update
+  (lambda (l i x)
+    (letrec ((worker (lambda (l i x)
+                       (match l
+                         (empty empty)
+                         ((make-pair f r) (if (zero? i)
+                                              (make-pair x r)
+                                              (make-pair f (worker r (- i 1) x))))))))
+      (worker l i x))))
+
+;(k.2) Legt eine Kopie des Pakets des Arbeiters auf den Fußbodenabschnitt i ab
+(: copy-to (natural -> instruction))
+(define copy-to
+  (lambda (i)
+    (make-instr (string-append "copy-to_" (number->string i))
+                (lambda (o)
+                  (if (> i 15)
+                      (make-office (inbox o)                                       ;indirekt
+                                   (outbox o)
+                                   (if (false? (worker o))
+                                       (violation "Der Arbeiter trägt nichts!")
+                                       (list-update (floor-slots o) (list-ref (floor-slots o) (- i 15)) (worker o)))
+                                   (worker o)
+                                   (instruction-list o)
+                                   (ip o)
+                                   (time-clock o))
+                      (make-office (inbox o)                                       ;direkt 
+                                   (outbox o)
+                                   (if (false? (worker o))
+                                       (violation "Der Arbeiter trägt nichts!")
+                                       (list-update (floor-slots o) i (worker o)))
+                                   (worker o)
+                                   (instruction-list o)
+                                   (ip o)
+                                   (time-clock o)))))))
+
+;(l) Nimmt eine Kopie des Paketes an der Stelle i des Fußbodens auf
+(: copy-from (natural -> instruction))
+(define copy-from
+  (lambda (i)
+    (make-instr (string-append "copy-from_" (number->string i))
+                (lambda (o)
+                  (if (> i 15)
+                      (make-office (inbox o)                                                         ;indirekt
+                                   (outbox o)
+                                   (floor-slots o)
+                                   (if (false? (list-ref (floor-slots o) i))
+                                       (violation "Auf diesem Stück Boden liegt kein Paket!")
+                                       (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                   (instruction-list o)
+                                   (ip o)
+                                   (time-clock o))
+                      (make-office (inbox o)                                                         ;direkt
+                                   (outbox o)
+                                   (floor-slots o)
+                                   (if (false? (list-ref (floor-slots o) i))
+                                       (violation "Auf diesem Stück Boden liegt kein Paket!")
+                                       (list-ref (floor-slots o) i))
+                                   (instruction-list o)
+                                   (ip o)
+                                   (time-clock o)))))))
+
+;(n.eins) Gibt die Position eines Buchstaben im Alphabet aus
+(: ordinal (character -> natural))
+(define Alphabet (list "A" "B" "C" "D" "E" "F" "G" "H" "I" "J" "K" "L" "M" "N" "O" "P" "Q" "R" "S" "T" "U" "V" "W" "X" "Y" "Z")) ;Liste des Alphabets
+(check-expect (ordinal "Z") 26)
+(check-expect (ordinal "A") 1)
+(define ordinal
+  (lambda (c)
+    (+ 1 (list-index (lambda (x) (string=? x c)) Alphabet))))
+
+;(n.2) Addiert das Paket an der Stelle i des Fußbodens auf das Paket des Arbeiters, Buchstaben werden zu Zahlen anhand der Stelle im Alphabet umgewandelt (ordinal)
+(: add (natural -> instruction))
+(define add
+  (lambda (i)
+    (make-instr (string-append "add_" (number->string i))
+                (lambda (o)
+                  (if (> i 15)
+                      (make-office (inbox o)                                                                     ;indirekt
+                                   (outbox o)
+                                   (floor-slots o)
+                                   (+ (if (string? (worker o))
+                                          (ordinal (worker o))
+                                          (worker o))
+                                      (if (string? (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                          (ordinal (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                          (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15)))))
+                                   (instruction-list o)
+                                   (ip o)
+                                   (time-clock o))
+                      (make-office (inbox o)                                                                     ;direkt     
+                                   (outbox o)
+                                   (floor-slots o)
+                                   (+ (if (string? (worker o))
+                                          (ordinal (worker o))
+                                          (worker o))
+                                      (if (string? (list-ref (floor-slots o) i))
+                                          (ordinal (list-ref (floor-slots o) i))
+                                          (list-ref (floor-slots o) i)))
+                                   (instruction-list o)
+                                   (ip o)
+                                   (time-clock o)))))))
+
+;(n.3) Analog zu add aber Subtraktion
+(: sub (natural -> instruction))
+(define sub
+  (lambda (i)
+    (make-instr (string-append "sub_" (number->string i))
+                (lambda (o)
+                  (if (> i 15)
+                      (make-office (inbox o)                                       ;indirekt
+                                   (outbox o)
+                                   (floor-slots o)
+                                   (- (if (string? (worker o))
+                                          (ordinal (worker o))
+                                          (worker o))
+                                      (if (string? (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                          (ordinal (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                          (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15)))))
+                                   (instruction-list o)
+                                   (ip o)
+                                   (time-clock o))
+                      (make-office (inbox o)                                       ;direkt
+                                   (outbox o)
+                                   (floor-slots o)
+                                   (- (if (string? (worker o))
+                                          (ordinal (worker o))
+                                          (worker o))
+                                      (if (string? (list-ref (floor-slots o) i))
+                                          (ordinal (list-ref (floor-slots o) i))
+                                          (list-ref (floor-slots o) i)))
+                                   (instruction-list o)
+                                   (ip o)
+                                   (time-clock o)))))))
+
+;(n.4) Erhöht den Inhalt an der Stelle i des Fußbodens um eins und der Arbeiter nimmt eine Kopie davon auf, wenn der Fußbodenabschnitt leer ist wird abgebrochen
+(: bump+ (natural -> instruction))
+(define bump+
+  (lambda (i)
+    (make-instr (string-append "bump+_" (number->string i))
+                (lambda (o)
+                  (if (false? (list-ref (floor-slots o) i))
+                      (violation "Der Fußboden an der Stelle ist leer!")
+                      (if (> i 15)
+                          (make-office (inbox o)                                                                 ;indirekt
+                                       (outbox o)
+                                       (list-update (floor-slots o) i (+ 1 (if (string? (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                                                               (ordinal (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                                                               (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))))
+                                       (+ 1 (if (string? (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                                (ordinal (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                                (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15)))))
+                                       (instruction-list o)
+                                       (ip o)
+                                       (time-clock o))
+                          (make-office (inbox o)                                                                 ;direkt
+                                       (outbox o)
+                                       (list-update (floor-slots o) i (+ 1 (if (string? (list-ref (floor-slots o) i))
+                                                                               (ordinal (list-ref (floor-slots o) i))
+                                                                               (list-ref (floor-slots o) i))))
+                                       (+ 1 (if (string? (list-ref (floor-slots o) i))
+                                                (ordinal (list-ref (floor-slots o) i))
+                                                (list-ref (floor-slots o) i)))
+                                       (instruction-list o)
+                                       (ip o)
+                                       (time-clock o))))))))
+
+
+
+;(n.5) Verringert den Inhalt an der Stelle i des Fußbodens um eins und der Arbeiter nimmt eine Kopie davon auf, wenn der Fußbodenabschnitt leer ist wird abgebrochen
+(: bump- (natural -> instruction))
+(define bump-
+  (lambda (i)
+    (make-instr (string-append "bump-_" (number->string i))
+                (lambda (o)
+                  (if (false? (list-ref (floor-slots o) i))
+                      (violation "Der Fußboden an der Stelle ist leer!")
+                      (if (> i 15)
+                          (make-office (inbox o)                                              ;indirekt
+                                       (outbox o)
+                                       (list-update (floor-slots o) i (- (if (string? (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                                                             (ordinal (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                                                             (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                                                         1))
+                                       (- (if (string? (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                              (ordinal (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                              (list-ref (floor-slots o) (list-ref (floor-slots o) (- i 15))))
+                                          1)
+                                       (instruction-list o)
+                                       (ip o)
+                                       (time-clock o))
+                          (make-office (inbox o)                                             ;direkt
+                                       (outbox o)
+                                       (list-update (floor-slots o) i (- (if (string? (list-ref (floor-slots o) i))
+                                                                             (ordinal (list-ref (floor-slots o) i))
+                                                                             (list-ref (floor-slots o) i))
+                                                                         1))
+                                       (- (if (string? (list-ref (floor-slots o) i))
+                                              (ordinal (list-ref (floor-slots o) i))
+                                              (list-ref (floor-slots o) i))
+                                          1)
+                                       (instruction-list o)
+                                       (ip o)
+                                       (time-clock o))))))))
+   
+    
+
+; --------------------------------------------------------------------------------------------------------------
+; Running the office
+; --------------------------------------------------------------------------------------------------------------
+
+;(c) Perform the action of the next instruction
+(: perform-next (office -> office))
+(define perform-next
+  (lambda (o)
+    (if (>= (ip o) (length (instruction-list o))) (make-office (inbox o) 
+                                                               (outbox o)
+                                                               (floor-slots o)
+                                                               (worker o)
+                                                               (instruction-list o)
+                                                               #f
+                                                               (time-clock o))
+        (if (string? (list-ref (instruction-list o) (ip o))) (perform-next (make-office (inbox o) ;labels überspringen
+                                                                                        (outbox o)
+                                                                                        (floor-slots o)
+                                                                                        (worker o)
+                                                                                        (instruction-list o)
+                                                                                        (+ (ip o) 1)
+                                                                                        (time-clock o)))
+            (let ((oi ((action (list-ref (instruction-list o) (ip o))) o)))
+              (make-office (inbox oi)
+                           (outbox oi)
+                           (floor-slots oi)
+                           (worker oi)
+                           (instruction-list oi)
+                           (if (false? (ip oi))
+                               #f
+                               (+ (ip oi) 1))
+                           (+ (time-clock oi) 1)))))))
+                               
+
+;(d) Iteratively apply instructions to a given office
+(: perform-all (office -> office))
+(define perform-all
+  (lambda (o)
+    (if (false? (ip o)) o (perform-all (perform-next o)))
+    ))
+
+
+; --------------------------------------------------------------------------------------------------------------
+; Draw and animate the office
+; --------------------------------------------------------------------------------------------------------------
+
+; Draw package
+(: draw-package ((maybe-of package) -> image))
+(define draw-package
+  (lambda (p)
+    (place-image (text (cond ((number? p) (number->string p))
+                             ((string? p) p)
+                             (else ""))
+                       14 "black")
+                 12 12
+                 (overlay
+                  (cond ((boolean? p) empty-image)
+                        (else (rectangle 20 20 "solid" "lightgray")))
+                  (rectangle 23 23 "solid" "brown")
+                  (rectangle 24 24 "solid" "white")))))
+
+; Draw list of packages
+(: draw-pkgs (string (list-of (maybe-of package)) -> image))
+(define draw-pkgs
+  (lambda (lbl ps)
+    (beside (place-image/align (text lbl 14 "black") (* 2.5 24) 12 "right" "center" (rectangle (* 2.5 24) 24 "solid" "white"))
+            (empty-scene 3 0)
+            (fold empty-image beside (map draw-package ps)))))
+
+; Draw instruction based on instruction pointer and a given line number
+(: draw-instruction ((maybe-of natural) -> (natural (mixed instruction string) -> image)))
+(define draw-instruction
+  (lambda (ip)
+    (lambda (n instr)
+      (let ((current? (and (number? ip) (= ip n))))
+        (text/font (string-append
+                    (if current? ">" " ")
+                    (if (< n 10) "0" "")
+                    (number->string n) ": "
+                    (cond ((string? instr)
+                           (string-append "\"" instr "\""))
+                          (else (description instr))))
+                   16 "black" #f "modern" "normal"
+                   (if current? "bold" "normal")
+                   #f)))))
+
+; Draw list of instructions
+(: draw-instructions ((list-of (mixed instruction string)) (maybe-of natural) -> image))
+(define draw-instructions
+  (lambda (is ip)
+    (above/align "left"
+                 (text "Board of instructions: (press any key to proceed, ESC to finish work)"  14 "black")
+                 (empty-scene 0 6)
+                 (beside (empty-scene 12 0)
+                         (fold empty-image
+                               (lambda (instr res)
+                                 (above/align "left" instr res))
+                               (zipWith (draw-instruction ip)
+                                        (range 0 (- (length is) 1))
+                                        is)))            
+                 (empty-scene 0 6))))
+
+; Draw the office
+(: draw-office (office -> image))
+(define draw-office
+  (lambda (o)
+    (above/align "left"
+                 (text "Human Resource Machine Post Office" 30 "gray")
+                 (empty-scene 0 6)
+                 (draw-instructions (instruction-list o) (ip o))
+                 (empty-scene 0 6)
+                 (draw-pkgs "inbox <-" (inbox o))
+                 (empty-scene 0 6)
+                 (beside (draw-pkgs "worker" (list (worker o)))
+                         (draw-pkgs "floor" (floor-slots o)))
+                 (empty-scene 0 6)
+                 (draw-pkgs "outbox ->" (outbox o))
+                 (empty-scene 0 6)
+                 (text (string-append "Time clock: " (number->string (time-clock o))) 14 "black")
+                 )))
+
+; Animate the office
+(: start-office-day (office -> office))
+(define start-office-day
+  (lambda (o)
+    (big-bang o
+      (to-draw draw-office)
+      (on-key (lambda (o key)
+                (cond ((key=? key "escape") (perform-all o))
+                      (else (perform-next o))))))))
+
+
+; --------------------------------------------------------------------------------------------------------------
+; Programs and tests
+; --------------------------------------------------------------------------------------------------------------
+
+; Solution day 1
+(define day01
+  (make-office (list "E" 3) empty    ; inbox, outbox
+               (replicate 16 #f) #f  ; floor, worker
+               (list <-inbox         ; instructions:
+                     ->outbox
+                     <-inbox
+                     ->outbox)            
+               0 0))                 ; ip, time
+
+(check-expect (outbox (perform-all day01)) (list 3 "E"))
+
+
+; --------------
+; Student task
+; --------------
+
+; Exercises (h), (j), (m) and (o): implement and test the worker's instructions
+
+;(h) Solution day 2
+(define day02
+  (make-office (list "E" 3 4) empty    ; inbox, outbox
+               (replicate 16 #f) #f  ; floor, worker
+               (list "start"
+                     <-inbox         ; instructions:
+                     ->outbox
+                     (jump "start"))            
+               0 0))                 ; ip, time
+
+(check-expect (outbox (perform-all day02)) (list 4 3 "E"))
+
+;(j) Solution day 3
+(define day03
+  (make-office (list -3 "C" 2 4 -2 0) empty ;inbox, outbox
+               (replicate 16 #f) #f         ;floor, worker
+               (list "start"
+                     <-inbox
+                     (jump-if-negative "start")  ;instructions
+                     ->outbox
+                     (jump "start"))
+               0 0))                        ; ip, time
+
+(check-expect (outbox (perform-all day03)) (list 0 4 2 "C"))
+
+;(m) Solution day04
+(define day04
+  (make-office (list 4 8 "W" "E" 3 8) empty ;inbox, outbox
+               (replicate 16 #f) #f         ;floor, worker
+               (list "start"
+                     <-inbox
+                     (copy-to 0)  ;instructions
+                     <-inbox
+                     ->outbox
+                     (copy-from 0)
+                     ->outbox
+                     (jump "start"))
+               0 0))                        ; ip, time
+
+(check-expect (outbox (perform-all day04)) (list 3 8 "W" "E" 4 8))
+
+;(o) Solution day05
+(define day05
+  (make-office (list 7 2 3 5 13 3) empty ;inbox, outbox
+               (replicate 16 #f) #f         ;floor, worker
+               (list "start"
+                     <-inbox
+                     (copy-to 0)         ;instructions
+                     (sub 0)
+                     (copy-to 2)
+                     <-inbox
+                     (copy-to 1)
+                     "loop"
+                     (copy-from 0)
+                     (sub 1)
+                     (copy-to 0)
+                     (jump-if-negative "ende")
+                     (bump+ 2)
+                     (jump-if-zero "ende")
+                     (jump "loop")
+                     "ende"
+                     (copy-from 2)
+                     ->outbox
+                     (jump "start"))
+               0 0))                        ; ip, time
+
+(check-expect (outbox (perform-all day05)) (list 4 0 3))
+
+;(Bonus) Solution day29
+(define day29
+  (make-office (list "H" "A" "P" "P" "Y" "N" "E" "W" "Y" "E" "A" "R") empty ;inbox, outbox
+               (replicate 16 #f) #f         ;floor, worker
+               (list <-inbox
+                     (copy-to 0)
+                     ->outbox
+                     (copy-from 0)
+                     (sub 0)
+                     (copy-to 10)
+                     (bump+ 10)
+                     "newChar"
+                     <-inbox
+                     (copy-to 12)
+                     (copy-from 10)
+                     (copy-to 11)
+                     (bump- 11)
+                     "vergleichLoop"
+                     (copy-from 12)
+                     (sub 26)
+                     (jump-if-zero "newChar")
+                     (copy-from 11)
+                     (jump-if-zero "nichtDoppelt")
+                     (bump- 11)
+                     (jump "vergleichLoop")
+                     "nichtDoppelt"
+                     (copy-from 12)
+                     (copy-to 25)
+                     ->outbox
+                     (bump+ 10)
+                     (jump "newChar")
+                     )
+               0 0))                        ; ip, time
+
+(check-expect (outbox (perform-all day29)) (list "R" "W" "E" "N" "Y" "P" "A" "H"))

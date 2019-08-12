@@ -1,0 +1,23 @@
+;; Die ersten drei Zeilen dieser Datei wurden von DrRacket eingefügt. Sie enthalten Metadaten
+;; über die Sprachebene dieser Datei in einer Form, die DrRacket verarbeiten kann.
+#reader(lib "DMdA-vanilla-reader.ss" "deinprogramm")((modname A3) (read-case-sensitive #f) (teachpacks ((lib "image2.rkt" "teachpack" "deinprogramm") (lib "universe.rkt" "teachpack" "deinprogramm"))) (deinprogramm-settings #(#f write repeating-decimal #f #t none explicit #f ((lib "image2.rkt" "teachpack" "deinprogramm") (lib "universe.rkt" "teachpack" "deinprogramm")))))
+;A3
+
+;a)
+(define f
+  (lambda (x)
+    (j (g x))))
+(define j
+  (lambda (y)
+    (i y (h y))))
+;b) Wir berechnen (g x) einmal geben den Wert dann in die Funktion j weiter wo dieser als y zwischengespeichert ist
+;   und dort wird der Rest der Prozedur ausgeführt
+
+;c)
+(define f
+  (lambda (x)
+    (let (gx (g x))
+      (i gx (h gx)))))
+      
+
+
